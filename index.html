@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>MLB 9局職棒 紀錄</title>
+  <!-- 讓 iPhone 顯示為全螢幕 App 模式 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+  <!-- 引入 Tailwind CSS (樣式) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- 引入 React 核心 -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  
+  <!-- 引入 Babel (讓瀏覽器看不懂的 JSX 變成看得懂的 JS) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <!-- 引入 Lucide 圖示庫 -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    /* iOS 安全區域設定 (避開瀏海) */
+    body {
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+      background-color: #020617; /* Slate 950 */
+    }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    input, button, select { outline: none; }
+    
+    /* 動畫效果 */
+    @keyframes slideUp {
+      from { transform: translateY(100%); }
+      to { transform: translateY(0); }
+    }
+    .animate-slide-up {
+      animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+  </style>
+</head>
+<body>
+  
+  <div id="root"></div>
+
+  <!-- 這裡開始是主要的 React 程式碼 -->
+  <script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
+    
+    // --- 圖示元件包裝 ---
+    const Icon = ({ name, size = 20, className = "" }) => {
+      useEffect(() => { lucide.createIcons(); }, [name]); 
+      return <i data-lucide={name} className={className} style={{ width: size, height: size }}></i>;
+    };
+
+    // --- 資料存取工具 (使用 LocalStorage) ---
+    const STORAGE_KEY_ACCOUNTS = 'mlb9_accounts_v1';
+    
+    // 產生唯一 ID
+    const generateId = () => Date.now().toString(36) + Math.random().toString(36).substr(2);
+
+    const getAccounts = () => {
+      try {
+        const data = localStorage.getItem(STORAGE_KEY_ACCOUNTS);
+        return data ? JSON.parse(data) : [];
+      } catch (e) {
+        return [];
+      }
+    };
+
+    const saveAccounts = (accounts) => {
+      localStorage.setItem(STORAGE_KEY_ACCOUNTS, JSON.stringify(accounts));
+    };
+
+    const getCards = (accountId) => {
+      try {
+        const key = `mlb9_cards_${accountId}`;
+        const data = localStorage.getItem(key);
+        return data ? JSON.parse(data) : [];
+      } catch (e) {
+        return [];
+      }
+    };
+
+    const saveCards = (accountId, cards) => {
+      const key = `mlb9_cards_${accountId}`;
+      localStorage.setItem(key, JSON.stringify(cards));
+    };
+
+    // --- App 主程式 ---
+    const App = () => {
+      // 頁面狀態
+      const [currentView, setCurrentView] = useState('accounts'); // 'accounts' 或 'dashboard'
+      const [selectedAccount, setSelectedAccount] = useState(null);
+      
+      // 資料狀態
+      const [accounts, setAccounts] = useState([]);
+      const [accountCards, setAccountCards] = useState([]);
+
+      // 表單狀態
+      const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+      const [isCardModalOpen, setIsCardModalOpen] = useState(false);
+      
+      // 輸入欄位
+      const [newAccountName, setNewAccountName] = useState('');
+      const [newAccountSince, setNewAccountSince] = useState('');
+      const [newCardName, setNewCardName] = useState('');
+      const [newCardType, setNewCardType] = useState('signature');
+      const [newCardDate, setNewCardDate] = useState(new Date().toISOString().split('T')[0]);
+
+      // 卡片種類定義
+      const CARD_TYPES = [
+        { id: 'signature', label: '簽名 (Signature)', color: 'text-green-400', border: 'border-green-500/50', bg: 'bg-green-500/10', icon: 'user' },
+        { id: 'legend', label: '傳說 (Legend)', color: 'text-purple-400', border: 'border-purple-500/50', bg: 'bg-purple-500/10', icon: 'crown' },
+        { id: 'supreme', label: '卓越 (Supreme)', color: 'text-red-400', border: 'border-red-500/50', bg: 'bg-red-500/10', icon: 'zap' },
+        { id: 'prime', label: '全盛 (Prime)', color: 'text-blue-400', border: 'border-blue-500/30', bg: 'bg-blue-500/10', icon: 'star' },
+        { id: 'vintage', label: '經典 (Vintage)', color: 'text-amber-600', border: 'border-amber-600/30', bg: 'bg-amber-600/10', icon: 'activity' },
+        { id: 'normal', label: '一般/其他', color: 'text-gray-400', border: 'border-gray-600/30', bg: 'bg-gray-600/10', icon: 'user' },
+      ];
+
+      // --- 初始化讀取 ---
+      useEffect(() => {
+        const loadedAccounts = getAccounts();
+        setAccounts(loadedAccounts);
+      }, []);
+
+      // --- 讀取卡片 (當選中帳號時) ---
+      useEffect(() => {
+        if (selectedAccount) {
+          const loadedCards = getCards(selectedAccount.id);
+          // 排序：新到舊
+          loadedCards.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          setAccountCards(loadedCards);
+        }
+      }, [selectedAccount]);
+
+      // --- 數據統計 ---
+      const stats = useMemo(() => {
+        const counts = { signature: 0, legend: 0, supreme: 0, total: 0 };
+        accountCards.forEach(card => {
+          counts.total++;
+          if (card.type === 'signature') counts.signature++;
+          if (card.type === 'legend') counts.legend++;
+          if (card.type === 'supreme') counts.supreme++;
+        });
+        return counts;
+      }, [accountCards]);
+
+      const getCardTypeInfo = (typeId) => CARD_TYPES.find(t => t.id === typeId) || CARD_TYPES[5];
+
+      // --- 操作功能 ---
+      const handleCreateAccount = (e) => {
+        e.preventDefault();
+        if (!newAccountName) return;
+
+        const newAccount = {
+          id: generateId(),
+          name: newAccountName,
+          since: newAccountSince || new Date().toISOString().split('T')[0],
+          createdAt: Date.now()
+        };
+
+        const updatedAccounts = [...accounts, newAccount];
+        setAccounts(updatedAccounts);
+        saveAccounts(updatedAccounts); // 存入 LocalStorage
+        
+        setNewAccountName('');
+        setNewAccountSince('');
+        setIsAccountModalOpen(false);
+      };
+
+      const handleAddCard = (e) => {
+        e.preventDefault();
+        if (!newCardName || !selectedAccount) return;
+
+        const newCard = {
+          id: generateId(),
+          name: newCardName,
+          type: newCardType,
+          date: newCardDate,
+          createdAt: Date.now()
+        };
+
+        const updatedCards = [...accountCards, newCard];
+        // 重新排序
+        updatedCards.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        
+        setAccountCards(updatedCards);
+        saveCards(selectedAccount.id, updatedCards); // 存入 LocalStorage
+
+        setNewCardName('');
+        setIsCardModalOpen(false);
+      };
+
+      const handleDeleteCard = (cardId) => {
+        if(!confirm('確定刪除這張卡片紀錄？')) return;
+        
+        const updatedCards = accountCards.filter(c => c.id !== cardId);
+        setAccountCards(updatedCards);
+        saveCards(selectedAccount.id, updatedCards);
+      };
+
+      const handleDeleteAccount = (e, accId) => {
+        e.stopPropagation();
+        if(!confirm('確定刪除此帳號及所有紀錄？')) return;
+        
+        // 1. 刪除帳號本體
+        const updatedAccounts = accounts.filter(a => a.id !== accId);
+        setAccounts(updatedAccounts);
+        saveAccounts(updatedAccounts);
+        
+        // 2. 清除該帳號的卡片資料 (清除 LocalStorage 對應 key)
+        localStorage.removeItem(`mlb9_cards_${accId}`);
+        
+        if (selectedAccount && selectedAccount.id === accId) {
+          setSelectedAccount(null);
+          setCurrentView('accounts');
+        }
+      };
+
+      // --- 渲染畫面 ---
+
+      // 1. 帳號選擇頁面 (大廳)
+      if (currentView === 'accounts') {
+        return (
+          <div className="min-h-screen bg-slate-950 text-white p-6 max-w-md mx-auto">
+            <div className="flex justify-between items-center mb-8 mt-4">
+              <div>
+                <h1 className="text-2xl font-bold italic">MLB 9Innings</h1>
+                <p className="text-blue-400 text-xs font-bold tracking-widest uppercase">帳號管理中心</p>
+              </div>
+              <button 
+                onClick={() => setIsAccountModalOpen(true)}
+                className="bg-blue-600 p-2 rounded-full shadow-lg active:scale-95 transition-transform"
+              >
+                <Icon name="plus" className="text-white" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {accounts.map(acc => (
+                <div 
+                  key={acc.id}
+                  onClick={() => { setSelectedAccount(acc); setCurrentView('dashboard'); }}
+                  className="bg-slate-900 border-l-4 border-blue-500 rounded-r-xl p-5 relative overflow-hidden active:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  <div className="absolute right-[-10px] top-[-10px] opacity-5 rotate-12">
+                    <Icon name="trophy" size={100} />
+                  </div>
+                  <div className="flex justify-between items-start relative z-10">
+                    <div>
+                      <h3 className="text-xl font-bold mb-1">{acc.name}</h3>
+                      <div className="flex items-center text-slate-400 text-xs">
+                        <span className="mr-1 pt-1"><Icon name="calendar" size={12} /></span>
+                        Since: {acc.since}
+                      </div>
+                    </div>
+                    <button onClick={(e) => handleDeleteAccount(e, acc.id)} className="text-slate-600 p-2 active:text-red-400">
+                      <Icon name="trash-2" size={18} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {accounts.length === 0 && (
+                <div className="text-center py-12 border-2 border-dashed border-slate-800 rounded-2xl bg-slate-900/50">
+                  <p className="text-slate-400">尚無帳號紀錄<br/>點擊右上角新增</p>
+                </div>
+              )}
+            </div>
+
+            {/* 新增帳號 Modal */}
+            {isAccountModalOpen && (
+              <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
+                <div className="bg-slate-900 border border-slate-700 w-full max-w-xs rounded-2xl p-6 animate-slide-up">
+                  <h3 className="text-lg font-bold mb-4 text-white">新增球隊</h3>
+                  <form onSubmit={handleCreateAccount} className="space-y-4">
+                    <div>
+                      <label className="text-xs text-slate-400 font-bold">球隊名稱</label>
+                      <input type="text" placeholder="例如: 洋基主帳" className="w-full bg-slate-800 p-3 rounded-lg text-white mt-1" value={newAccountName} onChange={e => setNewAccountName(e.target.value)} required />
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-400 font-bold">創帳日期</label>
+                      <input type="date" className="w-full bg-slate-800 p-3 rounded-lg text-white mt-1" value={newAccountSince} onChange={e => setNewAccountSince(e.target.value)} />
+                    </div>
+                    <div className="flex gap-2 pt-2">
+                      <button type="button" onClick={() => setIsAccountModalOpen(false)} className="flex-1 py-2 text-slate-400">取消</button>
+                      <button type="submit" className="flex-1 py-2 bg-blue-600 text-white rounded-lg font-bold">建立</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      // 2. 帳號詳情 (儀表板)
+      return (
+        <div className="min-h-screen bg-slate-950 text-white flex flex-col max-w-md mx-auto relative">
+          {/* Header */}
+          <div className="sticky top-0 bg-slate-950/95 backdrop-blur border-b border-slate-800 p-4 flex items-center gap-3 z-30 pt-safe-top">
+            <button onClick={() => { setSelectedAccount(null); setCurrentView('accounts'); }} className="text-slate-400 p-1">
+              <Icon name="chevron-left" size={24} />
+            </button>
+            <div className="flex-1">
+              <h1 className="text-lg font-bold truncate">{selectedAccount.name}</h1>
+              <p className="text-[10px] text-slate-500 font-mono">SINCE {selectedAccount.since}</p>
+            </div>
+            <div className="text-right">
+              <span className="text-[10px] text-slate-500 block">Total</span>
+              <span className="font-mono font-bold text-lg">{stats.total}</span>
+            </div>
+          </div>
+
+          <div className="p-4 space-y-6 flex-1 overflow-y-auto pb-24 no-scrollbar">
+            {/* 統計卡片 */}
+            <div className="grid grid-cols-3 gap-2">
+              <div className="bg-green-500/10 border border-slate-800 rounded-xl p-2 py-3 flex flex-col items-center">
+                <span className="text-2xl font-black text-green-400">{stats.signature}</span>
+                <span className="text-[9px] uppercase tracking-wider text-slate-400 mt-1">Signature</span>
+              </div>
+              <div className="bg-purple-500/10 border border-slate-800 rounded-xl p-2 py-3 flex flex-col items-center">
+                <span className="text-2xl font-black text-purple-400">{stats.legend}</span>
+                <span className="text-[9px] uppercase tracking-wider text-slate-400 mt-1">Legend</span>
+              </div>
+              <div className="bg-red-500/10 border border-slate-800 rounded-xl p-2 py-3 flex flex-col items-center">
+                <span className="text-2xl font-black text-red-400">{stats.supreme}</span>
+                <span className="text-[9px] uppercase tracking-wider text-slate-400 mt-1">Supreme</span>
+              </div>
+            </div>
+
+            {/* 列表 */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-xs font-bold text-slate-400 uppercase flex items-center gap-1">
+                  <Icon name="activity" size={14} /> 紀錄列表
+                </h2>
+                <button 
+                  onClick={() => setIsCardModalOpen(true)}
+                  className="flex items-center gap-1 text-xs bg-blue-600 px-3 py-1.5 rounded-full font-bold shadow-lg active:scale-95 transition-transform"
+                >
+                  <Icon name="plus" size={14} /> 新增
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                {accountCards.map(card => {
+                  const type = getCardTypeInfo(card.type);
+                  return (
+                    <div key={card.id} className={`flex items-center gap-3 bg-slate-900 p-3 rounded-xl border-l-4 ${type.border.replace('/50','').replace('/30','')}`}>
+                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${type.bg}`}>
+                        <Icon name={type.icon} className={type.color} size={20} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex justify-between">
+                          <h3 className="font-bold truncate text-sm sm:text-base">{card.name}</h3>
+                        </div>
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${type.bg} ${type.color} border border-slate-800`}>
+                            {type.label.split(' ')[0]}
+                          </span>
+                          <span className="text-xs text-slate-500">{card.date}</span>
+                        </div>
+                      </div>
+                      <button onClick={() => handleDeleteCard(card.id)} className="p-2 text-slate-600 active:text-red-400">
+                        <Icon name="trash-2" size={16} />
+                      </button>
+                    </div>
+                  );
+                })}
+                {accountCards.length === 0 && <div className="text-center py-10 opacity-30 text-sm">尚無紀錄</div>}
+              </div>
+            </div>
+          </div>
+
+          {/* 新增卡片 Modal (底部彈出) */}
+          {isCardModalOpen && (
+            <div className="fixed inset-0 bg-black/80 z-50 flex items-end justify-center">
+              <div className="bg-slate-900 border-t border-slate-700 w-full max-w-md rounded-t-2xl p-5 animate-slide-up pb-10">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-bold text-white">新增紀錄</h3>
+                  <button onClick={() => setIsCardModalOpen(false)} className="text-slate-500 p-2"><Icon name="x" size={20} /></button>
+                </div>
+                <form onSubmit={handleAddCard} className="space-y-4">
+                  <div>
+                    <label className="text-xs text-slate-400 font-bold">球員名稱</label>
+                    <input type="text" placeholder="例如: Ohtani '24" className="w-full bg-slate-800 p-3 rounded-lg text-white mt-1" value={newCardName} onChange={e => setNewCardName(e.target.value)} required />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400 font-bold">卡種</label>
+                    <div className="grid grid-cols-3 gap-2 mt-1">
+                      {CARD_TYPES.map(type => (
+                        <button
+                          key={type.id} type="button"
+                          onClick={() => setNewCardType(type.id)}
+                          className={`text-[10px] py-2 px-1 rounded border transition-all flex flex-col items-center gap-1 ${
+                            newCardType === type.id ? `${type.color} ${type.border} bg-slate-800 ring-1 ring-current font-bold` : 'text-slate-500 border-slate-700 bg-slate-800/30'
+                          }`}
+                        >
+                          <Icon name={type.icon} size={14} />
+                          {type.label.split(' ')[0]}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400 font-bold">獲得日期</label>
+                    <input type="date" className="w-full bg-slate-800 p-3 rounded-lg text-white mt-1" value={newCardDate} onChange={e => setNewCardDate(e.target.value)} />
+                  </div>
+                  <button type="submit" className="w-full py-3 bg-blue-600 rounded-lg font-bold mt-2 text-white">儲存</button>
+                </form>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>

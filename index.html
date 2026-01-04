@@ -2,15 +2,12 @@
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8">
-  <title>MLB 9局職棒 紀錄 (最終修復版)</title>
-  
-  <!-- iOS PWA 設定 -->
+  <title>MLB 9局職棒 紀錄 (自動連線版)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="MLB紀錄">
 
-  <!-- 樣式與工具庫 -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -20,32 +17,38 @@
   <!-- Firebase SDK -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-    import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+    import { 
+      getAuth, 
+      signInAnonymously, 
+      onAuthStateChanged,
+      signInWithEmailAndPassword,
+      createUserWithEmailAndPassword,
+      signOut,
+      linkWithCredential,
+      EmailAuthProvider
+    } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
     import { getFirestore, collection, addDoc, deleteDoc, doc, onSnapshot, serverTimestamp, query, orderBy } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
     window.Firebase = {
       initializeApp, getAuth, signInAnonymously, onAuthStateChanged,
+      signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, linkWithCredential, EmailAuthProvider,
       getFirestore, collection, addDoc, deleteDoc, doc, onSnapshot, serverTimestamp, query, orderBy
     };
     window.dispatchEvent(new Event('firebase-ready'));
   </script>
 
   <style>
-    /* 基礎樣式 */
     body {
       padding-top: env(safe-area-inset-top);
       padding-bottom: env(safe-area-inset-bottom);
-      background-color: #020617; /* Slate 950 */
+      background-color: #020617;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       overflow: hidden;
     }
     .no-scrollbar::-webkit-scrollbar { display: none; }
     .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-    
-    input, button, select, textarea { outline: none; -webkit-tap-highlight-color: transparent; }
+    input, button, select { outline: none; -webkit-tap-highlight-color: transparent; }
     input[type="date"] { color-scheme: dark; }
-    
-    /* 動畫 */
     @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
     .animate-slide-up { animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
@@ -53,78 +56,69 @@
   </style>
 </head>
 <body>
-  
   <div id="root"></div>
-
   <script type="text/babel">
     const { useState, useEffect, useMemo, useRef } = React;
     
-    // --- [關鍵修復] Icon 元件 ---
-    // 使用 useRef 建立一個獨立容器，讓 Lucide 在裡面自己玩，
-    // 這樣 React 就不會因為找不到被換掉的 DOM 而報錯 (NotFoundError)。
+    // --- 您的 Firebase 金鑰設定 (已直接寫入) ---
+    const FIREBASE_CONFIG = {
+      apiKey: "AIzaSyC7Jz7ieZjsUj009CmYcm3VAg3831n9ESQ",
+      authDomain: "mlb9innings-7f1c1.firebaseapp.com",
+      projectId: "mlb9innings-7f1c1",
+      storageBucket: "mlb9innings-7f1c1.firebasestorage.app",
+      messagingSenderId: "80304141620",
+      appId: "1:80304141620:web:0a29c6db9132d04bc72161",
+      measurementId: "G-GK8WL8XSVT"
+    };
+
+    // Icon 元件
     const Icon = ({ name, size = 20, className = "" }) => {
       const containerRef = useRef(null);
-
       useEffect(() => {
         if (!window.lucide || !containerRef.current) return;
-
-        // 1. 清空容器，確保乾淨
         containerRef.current.innerHTML = '';
-        
-        // 2. 建立一個臨時的標籤
         const i = document.createElement('i');
         i.setAttribute('data-lucide', name);
-        
-        // 3. 放入容器
         containerRef.current.appendChild(i);
-
-        // 4. 呼叫 Lucide 轉換 (只轉換這個容器內的)
-        window.lucide.createIcons({
-          root: containerRef.current,
-          attrs: {
-            width: size,
-            height: size,
-            class: className
-          }
-        });
+        window.lucide.createIcons({ root: containerRef.current, attrs: { width: size, height: size, class: className } });
       }, [name, size, className]);
-
       return <span ref={containerRef} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}></span>;
     };
 
-    // --- App 主程式 ---
     const App = () => {
       // 系統狀態
       const [firebaseReady, setFirebaseReady] = useState(false);
-      const [configError, setConfigError] = useState(false); 
+      const [initError, setInitError] = useState('');
       const [user, setUser] = useState(null);
       const [db, setDb] = useState(null);
-      
-      // 設定畫面輸入
-      const [configInput, setConfigInput] = useState('');
-      const [parseError, setParseError] = useState('');
+      const [auth, setAuth] = useState(null);
 
-      // App 顯示狀態
+      // UI 狀態
       const [currentView, setCurrentView] = useState('accounts');
       const [selectedAccount, setSelectedAccount] = useState(null);
       const [showSettings, setShowSettings] = useState(false);
+      const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
       
       // 資料狀態
       const [accounts, setAccounts] = useState([]);
       const [accountCards, setAccountCards] = useState([]);
 
-      // Modal 表單
+      // 表單狀態
       const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
       const [isCardModalOpen, setIsCardModalOpen] = useState(false);
-      
-      // 輸入值
       const [newAccountName, setNewAccountName] = useState('');
       const [newAccountSince, setNewAccountSince] = useState('');
       const [newCardName, setNewCardName] = useState('');
       const [newCardType, setNewCardType] = useState('signature');
       const [newCardDate, setNewCardDate] = useState(new Date().toISOString().split('T')[0]);
 
-      // 卡片類型定義
+      // 認證表單狀態
+      const [authMode, setAuthMode] = useState('login'); 
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [authError, setAuthError] = useState('');
+      const [isAuthLoading, setIsAuthLoading] = useState(false);
+
       const CARD_TYPES = [
         { id: 'signature', label: '簽名 (Signature)', color: 'text-green-400', border: 'border-green-500/50', bg: 'bg-green-500/10', icon: 'user' },
         { id: 'legend', label: '傳說 (Legend)', color: 'text-purple-400', border: 'border-purple-500/50', bg: 'bg-purple-500/10', icon: 'crown' },
@@ -134,99 +128,99 @@
         { id: 'normal', label: '一般/其他', color: 'text-gray-400', border: 'border-gray-600/30', bg: 'bg-gray-600/10', icon: 'user' },
       ];
 
-      // --- 1. 初始化 Firebase ---
+      // 1. 初始化 (直接使用常數設定)
       useEffect(() => {
         const init = async () => {
           if (!window.Firebase) return;
-          
-          let finalConfig = null;
 
-          // 讀取設定
-          const storedConfig = localStorage.getItem('mlb_firebase_config_v2');
-          if (storedConfig) {
-            try {
-              finalConfig = JSON.parse(storedConfig);
-            } catch (e) {
-              console.error("Stored config invalid");
-            }
-          }
-
-          // 沒有設定則顯示輸入畫面
-          if (!finalConfig) {
-            setConfigError(true);
-            return;
-          }
-
-          // 連線
           try {
             let app;
-            try {
-              app = window.Firebase.initializeApp(finalConfig);
-            } catch (e) {
-               if (e.code !== 'app/duplicate-app') throw e;
+            try { 
+              app = window.Firebase.initializeApp(FIREBASE_CONFIG); 
+            } catch (e) { 
+              if (e.code !== 'app/duplicate-app') throw e; 
             }
             
-            const auth = window.Firebase.getAuth(); 
+            const authInstance = window.Firebase.getAuth();
             const firestore = window.Firebase.getFirestore();
+            setAuth(authInstance);
             setDb(firestore);
 
-            await window.Firebase.signInAnonymously(auth);
-
-            window.Firebase.onAuthStateChanged(auth, (u) => {
+            window.Firebase.onAuthStateChanged(authInstance, async (u) => {
               if (u) {
                 setUser(u);
-                setFirebaseReady(true);
-                setConfigError(false);
+              } else {
+                // 自動匿名登入
+                await window.Firebase.signInAnonymously(authInstance);
               }
+              setFirebaseReady(true);
             });
           } catch (e) {
-            console.error("Firebase Init Error:", e);
-            localStorage.removeItem('mlb_firebase_config_v2');
-            setConfigError(true);
-            setParseError("連線失敗，您的金鑰可能無效，請重新輸入。");
+            console.error("Init Error", e);
+            setInitError("連線失敗，請檢查網路或是 Firebase 設定是否正確。");
           }
         };
-
+        
         if (window.Firebase) init();
         else window.addEventListener('firebase-ready', init);
         return () => window.removeEventListener('firebase-ready', init);
       }, []);
 
-      // --- 功能函式 ---
-      const handleSaveConfig = () => {
+      // 認證邏輯
+      const handleAuth = async (e) => {
+        e.preventDefault();
+        setAuthError('');
+        setIsAuthLoading(true);
+
         try {
-          let cleaned = configInput.trim();
-          cleaned = cleaned.replace(/^(const|var|let|export\s+const)\s+\w+\s*=\s*/, '');
-          cleaned = cleaned.replace(/;$/, '');
-          const configObj = new Function('return ' + cleaned)();
-
-          if (!configObj || !configObj.apiKey) throw new Error("格式不正確");
-
-          localStorage.setItem('mlb_firebase_config_v2', JSON.stringify(configObj));
-          window.location.reload();
-        } catch (e) {
-          setParseError("解析失敗，請確認複製完整的 { ... } 內容");
+          if (authMode === 'login') {
+            await window.Firebase.signInWithEmailAndPassword(auth, email, password);
+            setIsAuthModalOpen(false);
+            setTimeout(() => window.location.reload(), 500);
+          } else {
+            const credential = window.Firebase.EmailAuthProvider.credential(email, password);
+            if (user && user.isAnonymous) {
+              await window.Firebase.linkWithCredential(user, credential);
+              alert("綁定成功！您的資料現在已永久保存。");
+            } else {
+              await window.Firebase.createUserWithEmailAndPassword(auth, email, password);
+            }
+            setIsAuthModalOpen(false);
+          }
+        } catch (err) {
+          console.error(err);
+          let msg = err.message;
+          if (err.code === 'auth/email-already-in-use') msg = "此 Email 已被註冊，請切換到「登入」。";
+          if (err.code === 'auth/wrong-password') msg = "密碼錯誤。";
+          if (err.code === 'auth/user-not-found') msg = "找不到此帳號。";
+          if (err.code === 'auth/weak-password') msg = "密碼太弱，請至少輸入 6 位數。";
+          if (err.code === 'auth/credential-already-in-use') msg = "此 Email 已綁定其他帳號。請直接登入。";
+          if (err.code === 'auth/operation-not-allowed') msg = "請先到 Firebase Console 開啟 Email/Password 登入功能！";
+          setAuthError(msg);
+        } finally {
+          setIsAuthLoading(false);
         }
       };
 
-      const handleResetConfig = () => {
-        if (confirm('確定重設連結？需要重新輸入金鑰。')) {
-          localStorage.removeItem('mlb_firebase_config_v2');
+      const handleLogout = async () => {
+        if(confirm('確定要登出嗎？')) {
+          await window.Firebase.signOut(auth);
           window.location.reload();
         }
       };
 
-      // 讀取帳號
+      // 資料讀取
       useEffect(() => {
         if (!user || !db) return;
         const q = window.Firebase.query(window.Firebase.collection(db, 'artifacts', 'mlb_app', 'users', user.uid, 'mlb_accounts'));
         const unsubscribe = window.Firebase.onSnapshot(q, (snapshot) => {
           setAccounts(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+        }, (err) => {
+           if(err.code === 'permission-denied') alert("權限不足。請確認 Firebase Rules 為測試模式。");
         });
         return () => unsubscribe();
       }, [user, db]);
 
-      // 讀取卡片
       useEffect(() => {
         if (!user || !db || !selectedAccount) return;
         const cardsRef = window.Firebase.collection(db, 'artifacts', 'mlb_app', 'users', user.uid, 'mlb_accounts', selectedAccount.id, 'cards');
@@ -251,98 +245,72 @@
 
       const getCardTypeInfo = (typeId) => CARD_TYPES.find(t => t.id === typeId) || CARD_TYPES[5];
 
+      // 操作
       const handleCreateAccount = async (e) => {
         e.preventDefault();
         if (!newAccountName) return;
-        await window.Firebase.addDoc(window.Firebase.collection(db, 'artifacts', 'mlb_app', 'users', user.uid, 'mlb_accounts'), {
-          name: newAccountName,
-          since: newAccountSince || new Date().toISOString().split('T')[0],
-          createdAt: window.Firebase.serverTimestamp()
-        });
-        setNewAccountName('');
-        setIsAccountModalOpen(false);
+        try {
+          await window.Firebase.addDoc(window.Firebase.collection(db, 'artifacts', 'mlb_app', 'users', user.uid, 'mlb_accounts'), {
+            name: newAccountName, since: newAccountSince || new Date().toISOString().split('T')[0], createdAt: window.Firebase.serverTimestamp()
+          });
+          setNewAccountName(''); setIsAccountModalOpen(false);
+        } catch (e) { alert("失敗: " + e.message); }
       };
 
       const handleAddCard = async (e) => {
         e.preventDefault();
         if (!newCardName) return;
-        const cardsRef = window.Firebase.collection(db, 'artifacts', 'mlb_app', 'users', user.uid, 'mlb_accounts', selectedAccount.id, 'cards');
-        await window.Firebase.addDoc(cardsRef, {
-          name: newCardName,
-          type: newCardType,
-          date: newCardDate,
-          createdAt: window.Firebase.serverTimestamp()
-        });
-        setNewCardName('');
-        setIsCardModalOpen(false);
+        try {
+          const cardsRef = window.Firebase.collection(db, 'artifacts', 'mlb_app', 'users', user.uid, 'mlb_accounts', selectedAccount.id, 'cards');
+          await window.Firebase.addDoc(cardsRef, { name: newCardName, type: newCardType, date: newCardDate, createdAt: window.Firebase.serverTimestamp() });
+          setNewCardName(''); setIsCardModalOpen(false);
+        } catch (e) { alert("失敗: " + e.message); }
       };
 
-      const handleDeleteCard = async (cardId) => {
+      const handleDelete = async (coll, id) => {
         if(!confirm('確定刪除？')) return;
-        await window.Firebase.deleteDoc(window.Firebase.doc(db, 'artifacts', 'mlb_app', 'users', user.uid, 'mlb_accounts', selectedAccount.id, 'cards', cardId));
+        try {
+          await window.Firebase.deleteDoc(window.Firebase.doc(db, 'artifacts', 'mlb_app', 'users', user.uid, 'mlb_accounts', ...coll, id));
+        } catch (e) { alert("失敗: " + e.message); }
       };
 
-      const handleDeleteAccount = async (e, accId) => {
-        e.stopPropagation();
-        if(!confirm('確定刪除此帳號？')) return;
-        await window.Firebase.deleteDoc(window.Firebase.doc(db, 'artifacts', 'mlb_app', 'users', user.uid, 'mlb_accounts', accId));
-      };
+      // 渲染
+      if (initError) return <div className="h-screen w-full bg-slate-950 flex flex-col items-center justify-center text-red-400 p-4"><Icon name="alert-triangle" size={32}/><p className="mt-2">{initError}</p></div>;
 
-      // --- 渲染 ---
+      if (!firebaseReady) return <div className="h-screen w-full bg-slate-950 flex items-center justify-center text-slate-500"><div className="animate-spin mr-2"><Icon name="loader-2"/></div>連線中...</div>;
 
-      if (configError) {
-        return (
-          <div className="h-screen w-full flex flex-col items-center justify-center p-6 bg-slate-950 text-white animate-fade-in">
-            <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl">
-              <div className="flex flex-col items-center mb-6">
-                <div className="bg-blue-500/10 p-3 rounded-full mb-3">
-                  <Icon name="database" size={40} className="text-blue-500" />
-                </div>
-                <h2 className="text-xl font-bold">連結雲端資料庫</h2>
-                <p className="text-slate-400 text-sm mt-2 text-center">請貼上 Firebase Config</p>
-              </div>
-              <div className="space-y-4">
-                <textarea
-                  className="w-full h-48 bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs font-mono text-green-400 focus:border-blue-500 resize-none outline-none"
-                  placeholder={'const firebaseConfig = {\n  apiKey: "AIzaSy...",\n  ...\n};'}
-                  value={configInput}
-                  onChange={(e) => setConfigInput(e.target.value)}
-                />
-                {parseError && <div className="text-red-400 text-xs p-2">{parseError}</div>}
-                <button onClick={handleSaveConfig} className="w-full py-3 bg-blue-600 rounded-xl font-bold">開始使用</button>
-              </div>
-            </div>
-          </div>
-        );
-      }
-
-      if (!firebaseReady) {
-        return (
-          <div className="h-screen w-full bg-slate-950 flex flex-col items-center justify-center text-slate-500">
-            <div className="animate-spin mb-3 text-blue-500"><Icon name="loader-2" size={32} /></div>
-            <p className="text-sm font-medium">連線中...</p>
-          </div>
-        );
-      }
-
-      // 大廳
       if (currentView === 'accounts') {
         return (
           <div className="h-screen w-full bg-slate-950 text-white flex flex-col max-w-md mx-auto animate-fade-in relative">
             <div className="flex justify-between items-center px-6 py-6 pt-10">
-              <div onClick={() => setShowSettings(!showSettings)}>
+              <div onClick={() => setShowSettings(!showSettings)} className="cursor-pointer">
                 <h1 className="text-2xl font-black italic tracking-tighter">MLB 9Innings</h1>
                 <p className="text-blue-500 text-[10px] font-bold tracking-[0.2em] uppercase mt-1">Cloud Hub</p>
               </div>
-              <button onClick={() => setIsAccountModalOpen(true)} className="bg-blue-600 p-3 rounded-full shadow-lg active:scale-95 transition-all">
-                <Icon name="plus" className="text-white" size={24} />
-              </button>
+              <button onClick={() => setIsAccountModalOpen(true)} className="bg-blue-600 p-3 rounded-full shadow-lg active:scale-95 transition-all"><Icon name="plus" className="text-white" size={24} /></button>
             </div>
 
+            {/* 設定面板 */}
             {showSettings && (
-               <div className="px-6 mb-4 animate-fade-in">
-                 <button onClick={handleResetConfig} className="text-xs text-red-400 hover:text-red-300 underline">重設資料庫連結</button>
-               </div>
+              <div className="mx-6 mb-6 p-4 bg-slate-900/80 rounded-xl border border-slate-800 backdrop-blur-sm animate-slide-up">
+                <div className="flex justify-between items-center mb-3">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-2 h-2 rounded-full ${user?.isAnonymous ? 'bg-yellow-500' : 'bg-green-500'}`}></div>
+                    <span className="text-xs text-slate-300 font-medium">
+                      {user?.isAnonymous ? '訪客模式 (資料未同步)' : user?.email}
+                    </span>
+                  </div>
+                  {user && !user.isAnonymous && <button onClick={handleLogout} className="text-xs text-red-400 underline">登出</button>}
+                </div>
+                
+                {user?.isAnonymous ? (
+                  <button onClick={() => { setAuthMode('signup'); setIsAuthModalOpen(true); }} className="w-full py-2 bg-gradient-to-r from-indigo-600 to-blue-600 rounded-lg text-xs font-bold shadow-lg flex items-center justify-center gap-2">
+                    <Icon name="cloud-upload" size={14} /> 綁定帳號 (永久保存/跨裝置)
+                  </button>
+                ) : (
+                  <p className="text-[10px] text-slate-500 text-center">您的資料已安全同步至雲端</p>
+                )}
+              </div>
             )}
 
             <div className="flex-1 overflow-y-auto no-scrollbar px-6 pb-20 space-y-4">
@@ -352,17 +320,49 @@
                   <div className="flex justify-between items-start relative z-10">
                     <div>
                       <h3 className="text-xl font-bold mb-1 text-slate-100">{acc.name}</h3>
-                      <div className="flex items-center text-slate-400 text-xs font-medium">
-                        <span className="mr-1.5"><Icon name="calendar" size={12} /></span>
-                        SINCE: <span className="ml-1 text-slate-300">{acc.since}</span>
-                      </div>
+                      <div className="flex items-center text-slate-400 text-xs font-medium"><span className="mr-1.5"><Icon name="calendar" size={12} /></span>SINCE: <span className="ml-1 text-slate-300">{acc.since}</span></div>
                     </div>
-                    <button onClick={(e) => handleDeleteAccount(e, acc.id)} className="text-slate-600 p-2 -mr-2 -mt-2 active:text-red-400 hover:bg-slate-800 rounded-full"><Icon name="trash-2" size={16} /></button>
+                    <button onClick={(e) => { e.stopPropagation(); handleDelete([], acc.id); }} className="text-slate-600 p-2 -mr-2 -mt-2 active:text-red-400 hover:bg-slate-800 rounded-full"><Icon name="trash-2" size={16} /></button>
                   </div>
                 </div>
               ))}
-              {accounts.length === 0 && <div className="text-center py-16 opacity-30 text-slate-500">尚無球隊紀錄</div>}
+              {accounts.length === 0 && <div className="text-center py-16 opacity-30 text-slate-500 space-y-2"><Icon name="ghost" size={32} className="mx-auto"/><p className="text-sm">尚無球隊紀錄</p></div>}
             </div>
+
+            {/* Login Modal */}
+            {isAuthModalOpen && (
+              <div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center p-6 z-50 animate-fade-in">
+                <div className="bg-slate-900 border border-slate-700 w-full max-w-xs rounded-2xl p-6 shadow-2xl relative">
+                  <button onClick={() => setIsAuthModalOpen(false)} className="absolute top-4 right-4 text-slate-500"><Icon name="x" size={20}/></button>
+                  <h3 className="text-lg font-bold text-white mb-1 text-center">{authMode === 'login' ? '登入帳號' : '綁定/註冊帳號'}</h3>
+                  <p className="text-xs text-slate-400 text-center mb-6">{authMode === 'login' ? '登入以存取您的雲端資料' : '輸入 Email 密碼以永久保存目前的訪客資料'}</p>
+                  
+                  <form onSubmit={handleAuth} className="space-y-4">
+                    <div className="space-y-1">
+                      <label className="text-xs text-slate-400 font-bold ml-1">Email</label>
+                      <input type="email" required className="w-full bg-slate-950 border border-slate-800 p-3 rounded-xl text-white focus:border-blue-500" placeholder="user@example.com" value={email} onChange={e => setEmail(e.target.value)} />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-slate-400 font-bold ml-1">密碼</label>
+                      <input type="password" required className="w-full bg-slate-950 border border-slate-800 p-3 rounded-xl text-white focus:border-blue-500" placeholder="******" value={password} onChange={e => setPassword(e.target.value)} />
+                    </div>
+                    
+                    {authError && <div className="bg-red-900/30 border border-red-900/50 p-2 rounded text-red-400 text-xs flex items-center gap-2"><Icon name="alert-circle" size={14}/> {authError}</div>}
+                    
+                    <button type="submit" disabled={isAuthLoading} className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold flex justify-center items-center gap-2 transition-colors disabled:opacity-50">
+                      {isAuthLoading && <Icon name="loader-2" className="animate-spin" size={16}/>}
+                      {authMode === 'login' ? '登入' : '確認綁定'}
+                    </button>
+                  </form>
+
+                  <div className="mt-4 pt-4 border-t border-slate-800 text-center">
+                    <button onClick={() => { setAuthMode(authMode === 'login' ? 'signup' : 'login'); setAuthError(''); }} className="text-xs text-blue-400 hover:text-white transition-colors">
+                      {authMode === 'login' ? '還沒有帳號？註冊並綁定目前資料' : '已有帳號？直接登入'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {isAccountModalOpen && (
               <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-6 z-50">
@@ -433,7 +433,7 @@
                           <span className="text-[10px] text-slate-500 font-mono mt-0.5">{card.date}</span>
                         </div>
                       </div>
-                      <button onClick={() => handleDeleteCard(card.id)} className="p-2 text-slate-600 opacity-50 group-hover:opacity-100 hover:text-red-400 active:scale-90 transition-all"><Icon name="trash-2" size={18} /></button>
+                      <button onClick={() => handleDelete([selectedAccount.id, 'cards'], card.id)} className="p-2 text-slate-600 opacity-50 group-hover:opacity-100 hover:text-red-400 active:scale-90 transition-all"><Icon name="trash-2" size={18} /></button>
                     </div>
                   );
                 })}

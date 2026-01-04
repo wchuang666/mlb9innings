@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8">
-  <title>MLB 9局職棒 紀錄 (雲端帳號版)</title>
+  <title>MLB 9局職棒 紀錄 (帳號同步版)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -92,17 +92,13 @@
       const [user, setUser] = useState(null);
       const [db, setDb] = useState(null);
       const [auth, setAuth] = useState(null);
-      
-      // [關鍵修改] 這裡儲存真正用來讀寫資料的 ID
-      // 如果是 Email 登入 -> 用 Firebase User UID (跨裝置一致)
-      // 如果是 匿名 -> 用 手機 LocalStorage 固定住的 ID (防止 iOS 亂跳)
       const [activeUserId, setActiveUserId] = useState(null);
 
       // UI 狀態
       const [currentView, setCurrentView] = useState('accounts');
       const [selectedAccount, setSelectedAccount] = useState(null);
-      const [showSettings, setShowSettings] = useState(false);
       const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+      const [isProfileModalOpen, setIsProfileModalOpen] = useState(false); // 控制選擇視窗
       
       // 資料狀態
       const [accounts, setAccounts] = useState([]);
@@ -133,7 +129,7 @@
         { id: 'normal', label: '一般/其他', color: 'text-gray-400', border: 'border-gray-600/30', bg: 'bg-gray-600/10', icon: 'user' },
       ];
 
-      // 1. 初始化邏輯 (修正版)
+      // 1. 初始化邏輯
       useEffect(() => {
         const init = async () => {
           if (!window.Firebase) return;
@@ -155,24 +151,18 @@
               if (u) {
                 setUser(u);
                 
-                // [重點邏輯]
+                // 裝置 ID 邏輯
                 if (u.isAnonymous) {
-                  // 如果是匿名登入 (訪客)，我們還是要鎖定 ID 防止 iOS 搞丟資料
                   let savedStableId = localStorage.getItem('mlb_fixed_device_id_v2');
                   if (!savedStableId) {
                     savedStableId = u.uid;
                     localStorage.setItem('mlb_fixed_device_id_v2', savedStableId);
                   }
-                  console.log("訪客模式：使用本機鎖定 ID", savedStableId);
                   setActiveUserId(savedStableId);
                 } else {
-                  // 如果是 Email 正式登入，絕對使用 Firebase 給的 UID
-                  // 這樣跨裝置才會同步！
-                  console.log("正式登入：使用雲端帳號 ID", u.uid);
                   setActiveUserId(u.uid);
                 }
               } else {
-                // 沒登入就先用匿名頂著 (訪客)
                 await window.Firebase.signInAnonymously(authInstance);
               }
               setFirebaseReady(true);
@@ -196,27 +186,21 @@
 
         try {
           if (authMode === 'login') {
-            // 一般登入：登入後，上面的 onAuthStateChanged 會偵測到 !isAnonymous，
-            // 自動切換 activeUserId 為雲端 ID，資料就會同步過來了。
             await window.Firebase.signInWithEmailAndPassword(auth, email, password);
             setIsAuthModalOpen(false);
             
           } else {
-            // 註冊並綁定：把目前的匿名資料「升級」到這個 Email 帳號
             const credential = window.Firebase.EmailAuthProvider.credential(email, password);
             
             if (user && user.isAnonymous) {
-              // 這是關鍵：把匿名帳號連結到 Email
               await window.Firebase.linkWithCredential(user, credential);
               alert("綁定成功！現在您可以在任何裝置登入此 Email 看到資料了。");
             } else {
-              // 或是單純註冊新帳號
               await window.Firebase.createUserWithEmailAndPassword(auth, email, password);
             }
             setIsAuthModalOpen(false);
           }
-          
-          // 強制重整頁面以確保資料流正確切換
+          setIsProfileModalOpen(false); // 關閉選擇視窗
           setTimeout(() => window.location.reload(), 500);
 
         } catch (err) {
@@ -225,7 +209,7 @@
           if (err.code === 'auth/email-already-in-use') msg = "此 Email 已被註冊，請直接登入。";
           if (err.code === 'auth/wrong-password') msg = "密碼錯誤。";
           if (err.code === 'auth/user-not-found') msg = "找不到此帳號。";
-          if (err.code === 'auth/credential-already-in-use') msg = "此 Email 已綁定其他帳號。請直接登入 (目前的訪客資料不會合併)。";
+          if (err.code === 'auth/credential-already-in-use') msg = "此 Email 已綁定其他帳號。請直接登入。";
           if (err.code === 'auth/operation-not-allowed') msg = "請先到 Firebase Console 開啟 Email/Password 登入功能！";
           setAuthError(msg);
         } finally {
@@ -314,46 +298,60 @@
         return (
           <div className="h-screen w-full bg-slate-950 text-white flex flex-col max-w-md mx-auto animate-fade-in relative">
             <div className="flex justify-between items-center px-6 py-6 pt-10">
-              <div onClick={() => setShowSettings(!showSettings)} className="cursor-pointer group">
+              <div>
                 <h1 className="text-2xl font-black italic tracking-tighter">MLB 9Innings</h1>
-                <p className="text-blue-500 text-[10px] font-bold tracking-[0.2em] uppercase mt-1 group-hover:text-blue-400 transition-colors">
-                  {user && !user.isAnonymous ? '已登入: Cloud Sync On' : '訪客模式: Device Only'}
-                </p>
+                <p className="text-blue-500 text-[10px] font-bold tracking-[0.2em] uppercase mt-1">Cloud Hub</p>
               </div>
-              <button onClick={() => setIsAccountModalOpen(true)} className="bg-blue-600 p-3 rounded-full shadow-lg active:scale-95 transition-all"><Icon name="plus" className="text-white" size={24} /></button>
+              <div className="flex gap-3">
+                <button onClick={() => setIsProfileModalOpen(true)} className="bg-slate-800 p-3 rounded-full shadow-lg active:scale-95 transition-all text-slate-300 hover:text-white hover:bg-slate-700 relative">
+                  <Icon name="user" size={24} />
+                  {user && !user.isAnonymous && <div className="absolute top-0 right-0 w-2.5 h-2.5 bg-green-500 rounded-full border-2 border-slate-950"></div>}
+                </button>
+                <button onClick={() => setIsAccountModalOpen(true)} className="bg-blue-600 p-3 rounded-full shadow-lg active:scale-95 transition-all"><Icon name="plus" className="text-white" size={24} /></button>
+              </div>
             </div>
 
-            {/* 設定面板 */}
-            {showSettings && (
-              <div className="mx-6 mb-6 p-4 bg-slate-900/80 rounded-xl border border-slate-800 backdrop-blur-sm animate-slide-up">
-                <div className="flex justify-between items-center mb-4">
-                  <div className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${user?.isAnonymous ? 'bg-yellow-500' : 'bg-green-500'}`}></div>
-                    <span className="text-xs text-slate-300 font-medium">
-                      {user?.isAnonymous ? '訪客' : user?.email}
-                    </span>
-                  </div>
-                  {user && !user.isAnonymous && <button onClick={handleLogout} className="text-xs text-red-400 underline">登出</button>}
-                </div>
-                
-                {user?.isAnonymous ? (
-                  <div className="space-y-3">
-                    <button onClick={() => { setAuthMode('login'); setIsAuthModalOpen(true); }} className="w-full py-2.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-bold text-white flex items-center justify-center gap-2">
-                      <Icon name="log-in" size={14} /> 登入帳號 (同步舊資料)
-                    </button>
-                    <button onClick={() => { setAuthMode('signup'); setIsAuthModalOpen(true); }} className="w-full py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-lg text-xs font-bold text-white shadow-lg flex items-center justify-center gap-2">
-                      <Icon name="user-plus" size={14} /> 註冊並綁定目前資料
-                    </button>
-                    <p className="text-[10px] text-slate-500 text-center mt-2">
-                      註冊後，您的資料將會跟隨帳號，可跨裝置使用。
+            {/* Profile Selection Modal (取代原本的 Settings 面板) */}
+            {isProfileModalOpen && (
+              <div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center p-6 z-50 animate-fade-in">
+                <div className="bg-slate-900 border border-slate-700 w-full max-w-xs rounded-2xl p-6 shadow-2xl relative">
+                  <button onClick={() => setIsProfileModalOpen(false)} className="absolute top-4 right-4 text-slate-500"><Icon name="x" size={20}/></button>
+                  
+                  <div className="flex flex-col items-center mb-6">
+                    <div className="bg-slate-800 p-4 rounded-full mb-3">
+                      <Icon name="user-circle" size={48} className="text-slate-400" />
+                    </div>
+                    <h3 className="text-lg font-bold text-white mb-1">
+                      {user && !user.isAnonymous ? user.email : '訪客模式'}
+                    </h3>
+                    <p className="text-xs text-slate-500 text-center">
+                      {user && !user.isAnonymous ? '您已登入雲端帳號' : '資料目前僅存在此裝置'}
                     </p>
                   </div>
-                ) : (
-                  <p className="text-[10px] text-slate-500 text-center">您的資料已安全同步至雲端帳號</p>
-                )}
-                
-                <div className="mt-3 pt-2 border-t border-slate-800 flex justify-center opacity-50">
-                   <p className="text-[9px] text-slate-600 font-mono">UID: {activeUserId?.slice(0, 6)}...</p>
+
+                  <div className="space-y-3">
+                    {user && user.isAnonymous ? (
+                      <>
+                        <button onClick={() => { setAuthMode('login'); setIsAuthModalOpen(true); }} className="w-full py-3 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 transition-colors border border-slate-700">
+                          <Icon name="log-in" size={16} /> 登入舊帳號 (同步資料)
+                        </button>
+                        <button onClick={() => { setAuthMode('signup'); setIsAuthModalOpen(true); }} className="w-full py-3 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl text-sm font-bold text-white shadow-lg flex items-center justify-center gap-2 active:scale-[0.98] transition-all">
+                          <Icon name="cloud-upload" size={16} /> 註冊並綁定目前資料
+                        </button>
+                        <p className="text-[10px] text-slate-500 text-center mt-2 px-2">
+                          * 綁定後，您可以在任何裝置登入此 Email 存取資料。
+                        </p>
+                      </>
+                    ) : (
+                      <button onClick={handleLogout} className="w-full py-3 bg-red-900/30 hover:bg-red-900/50 text-red-400 border border-red-900/50 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-colors">
+                        <Icon name="log-out" size={16} /> 登出帳號
+                      </button>
+                    )}
+                  </div>
+                  
+                  <div className="mt-6 text-center">
+                     <p className="text-[9px] text-slate-700 font-mono">ID: {activeUserId?.slice(0, 8)}</p>
+                  </div>
                 </div>
               </div>
             )}
@@ -374,16 +372,16 @@
               {accounts.length === 0 && <div className="text-center py-16 opacity-30 text-slate-500 space-y-2"><Icon name="ghost" size={32} className="mx-auto"/><p className="text-sm">尚無球隊紀錄</p></div>}
             </div>
 
-            {/* Login Modal */}
+            {/* Login Modal (輸入框) */}
             {isAuthModalOpen && (
-              <div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center p-6 z-50 animate-fade-in">
+              <div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center p-6 z-[60] animate-fade-in">
                 <div className="bg-slate-900 border border-slate-700 w-full max-w-xs rounded-2xl p-6 shadow-2xl relative">
                   <button onClick={() => setIsAuthModalOpen(false)} className="absolute top-4 right-4 text-slate-500"><Icon name="x" size={20}/></button>
                   <h3 className="text-lg font-bold text-white mb-1 text-center">{authMode === 'login' ? '登入帳號' : '註冊並綁定'}</h3>
                   <p className="text-xs text-slate-400 text-center mb-6">
                     {authMode === 'login' 
-                      ? '登入以存取雲端資料 (注意：目前的訪客資料將被隱藏)' 
-                      : '將目前的訪客資料永久綁定到此新帳號'}
+                      ? '登入以存取雲端資料' 
+                      : '將目前的訪客資料永久綁定到此帳號'}
                   </p>
                   
                   <form onSubmit={handleAuth} className="space-y-4">
@@ -406,7 +404,7 @@
 
                   <div className="mt-4 pt-4 border-t border-slate-800 text-center">
                     <button onClick={() => { setAuthMode(authMode === 'login' ? 'signup' : 'login'); setAuthError(''); }} className="text-xs text-blue-400 hover:text-white transition-colors">
-                      {authMode === 'login' ? '還沒有帳號？註冊並綁定目前資料' : '已有帳號？直接登入'}
+                      {authMode === 'login' ? '還沒有帳號？去註冊' : '已有帳號？去登入'}
                     </button>
                   </div>
                 </div>
